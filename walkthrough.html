@@ -35,7 +35,7 @@
   <button id="go" type="submit">Open</button>
 </form>
 <script>
-const P = {"salt": "7FbvgMarN5/NaxqoIXknmg==", "iter": 600000, "iv": "x653LqhP4/P2WV8G", "ct": "m0JXu2oEkyWC2+gAx6KBdTmAciPuzImPZlDS9q6Ec4rB9WD6xf7YC8xco8Ne5KW5ZXZqjYJR+t7AdvkbXVazFvyRQN/xa3KDA7V2pWVZ9JyR1wbiQv0dC4rQWqB8Y+vUyCul0dPpSaMNVlsYQZ+L/qvmrAMCj4KnxJozP9YTBgG4liUv8BFeUpUcSwtTnW5KISaKZmd7nG8azI/KEXygFLP4XHrhyU4DcOjG4hk4M95L51ztbkDGrLmiklcx9Qt6JpojyXIhcRSG14hUKlzbGRlKgqg37IK0wfMdV4uoRx3Do6B8q0TT"};
+const P = {"salt": "7FbvgMarN5/NaxqoIXknmg==", "iter": 600000, "iv": "5sEw8HNHYK9wV3Hq", "ct": "XRE2nO2/KoqzqWjao3HaqAtQVZF+pGcMZZuKLof+z7frzvdzHTS/0ZrS5be+1yr/t+pBp8kOx5gVP+QFUCEStAk/ABckQ+pqwmmbwb5J/pFyjM3MBdkrTC4tD/b7L9/Is40oWOheSKIKzva6AvHTaymE33/cO1ojRe0iMiktpJz6n6hCPUkNuoPyTMSbQgNO/282KMkMnNwQ0dOlPrHgf0coMY9kva8c9sqNgImV96CCcp9YMCNl4TCV8U+6pWYGr9C2NBOM8ewRFjUMx7P8Z7/FllVEhPI4iijteMhxsbFDIxHNofRX"};
 const bytes = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 const toB64 = buf => btoa(String.fromCharCode.apply(null, new Uint8Array(buf)));
 async function render(raw) {
@@ -68,6 +68,13 @@ async function derive(password) {
     try {
       const raw = await derive(document.getElementById("pw").value);
       try { sessionStorage.setItem("dbq-key", JSON.stringify({ salt: P.salt, key: toB64(raw) })); } catch (_) {}
+      // A fresh unlock always starts on the overview, whichever page the link pointed at.
+      const page = location.pathname.split("/").pop();
+      if (page && page !== "index.html") {
+        await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes(P.iv) }, await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]), bytes(P.ct));
+        location.replace("./");
+        return;
+      }
       await render(raw);
     } catch (e) {
       try { sessionStorage.removeItem("dbq-key"); } catch (_) {}
