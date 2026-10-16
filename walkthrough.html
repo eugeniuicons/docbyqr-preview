@@ -35,7 +35,7 @@
   <button id="go" type="submit">Open</button>
 </form>
 <script>
-const P = {"salt": "7FbvgMarN5/NaxqoIXknmg==", "iter": 600000, "iv": "5sEw8HNHYK9wV3Hq", "ct": "XRE2nO2/KoqzqWjao3HaqAtQVZF+pGcMZZuKLof+z7frzvdzHTS/0ZrS5be+1yr/t+pBp8kOx5gVP+QFUCEStAk/ABckQ+pqwmmbwb5J/pFyjM3MBdkrTC4tD/b7L9/Is40oWOheSKIKzva6AvHTaymE33/cO1ojRe0iMiktpJz6n6hCPUkNuoPyTMSbQgNO/282KMkMnNwQ0dOlPrHgf0coMY9kva8c9sqNgImV96CCcp9YMCNl4TCV8U+6pWYGr9C2NBOM8ewRFjUMx7P8Z7/FllVEhPI4iijteMhxsbFDIxHNofRX"};
+const P = {"salt": "7FbvgMarN5/NaxqoIXknmg==", "iter": 600000, "iv": "dOqb9QY4gSxw/+pu", "ct": "lfjY56yt/9dAeEceZ2rxxbiA3Ps1TulUEY5oI+La/kwNYWxb1oL7a342mrdF6KGzA6mvy/dPOjUYlXApa/piQb5YEv9UdavD7Atqf+0+wAjqO8FP918JrQTCynl8UpkW5tapmLZhIB60Sl8Kla7I+kQ1zFrMJ8mON1T3vS37nkr0z2QLAmdDAyNgKOzVbp9t7p6Wg7N/+wnGiSh3f6NRl/6PciDLY0wua2bH926Y7a67Pxv+oYQXh1C+2jLlNnU4FA7kw5KTfyohGCBV/uGGw5nCqCnIUWPxedIWsG3yvsrGdxW8icVk"};
 const bytes = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 const toB64 = buf => btoa(String.fromCharCode.apply(null, new Uint8Array(buf)));
 async function render(raw) {
@@ -49,16 +49,39 @@ async function render(raw) {
   document.querySelectorAll("style, link[rel=stylesheet]").forEach(el => el.remove());
   document.body.className = "";
   document.open(); document.write(html); document.close();
+  if (/[?&]fresh=/.test(location.search)) history.replaceState(null, "", location.pathname + location.hash);
 }
 async function derive(password) {
   const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
   return crypto.subtle.deriveBits({ name: "PBKDF2", salt: bytes(P.salt), iterations: P.iter, hash: "SHA-256" }, base, 256);
 }
+// The tab keeps one key per build (keyed by salt). Browsers may cache pages from
+// an older build next to fresh ones; with one key each, both keep opening.
+const KEYS = "dbq-keys";
+function loadKeys() {
+  let keys = {};
+  try { keys = JSON.parse(sessionStorage.getItem(KEYS) || "{}") || {}; } catch (_) {}
+  try {  // the single key that earlier builds stored
+    const legacy = JSON.parse(sessionStorage.getItem("dbq-key") || "null");
+    if (legacy && legacy.salt && legacy.key && !keys[legacy.salt]) keys[legacy.salt] = legacy.key;
+  } catch (_) {}
+  return keys;
+}
+function saveKey(salt, key) {
+  try { const keys = loadKeys(); keys[salt] = key; sessionStorage.setItem(KEYS, JSON.stringify(keys)); } catch (_) {}
+}
 (async () => {
-  try {
-    const saved = JSON.parse(sessionStorage.getItem("dbq-key") || "null");
-    if (saved && saved.salt === P.salt) { await render(bytes(saved.key)); return; }
-  } catch (e) { try { sessionStorage.removeItem("dbq-key"); } catch (_) {} }
+  const keys = loadKeys();
+  if (keys[P.salt]) {
+    try { await render(bytes(keys[P.salt])); return; } catch (_) { /* fall through to the form */ }
+  }
+  const unlockedBefore = Object.keys(keys).length > 0;
+  // Unlocked before but not for this build: this copy is probably a stale cached
+  // one, so fetch a fresh copy once before asking for the password.
+  if (unlockedBefore && !/[?&]fresh=/.test(location.search)) {
+    location.replace(location.pathname + "?fresh=" + Date.now() + location.hash);
+    return;
+  }
   const form = document.getElementById("gate"), err = document.getElementById("err"), go = document.getElementById("go");
   form.hidden = false;
   document.getElementById("pw").focus();
@@ -67,17 +90,14 @@ async function derive(password) {
     err.textContent = ""; go.disabled = true; go.textContent = "Checking…";
     try {
       const raw = await derive(document.getElementById("pw").value);
-      try { sessionStorage.setItem("dbq-key", JSON.stringify({ salt: P.salt, key: toB64(raw) })); } catch (_) {}
-      // A fresh unlock always starts on the overview, whichever page the link pointed at.
+      const key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
+      await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes(P.iv) }, key, bytes(P.ct));  // throws if wrong
+      saveKey(P.salt, toB64(raw));
+      // The first unlock in a tab starts on the overview, whichever page the link pointed at.
       const page = location.pathname.split("/").pop();
-      if (page && page !== "index.html") {
-        await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes(P.iv) }, await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]), bytes(P.ct));
-        location.replace("./");
-        return;
-      }
+      if (!unlockedBefore && page && page !== "index.html") { location.replace("./"); return; }
       await render(raw);
     } catch (e) {
-      try { sessionStorage.removeItem("dbq-key"); } catch (_) {}
       err.textContent = "That password is not right. Try again.";
       go.disabled = false; go.textContent = "Open";
     }
